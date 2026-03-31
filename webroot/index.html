@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0e17">
+  <title>RadioControl</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <div class="header-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+    </div>
+    <h1>RadioControl</h1>
+    <p id="soc-badge">Detecting SoC...</p>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-chip" id="chip-eng"><span class="dot off"></span> ENG</div>
+    <div class="status-chip" id="chip-factory"><span class="dot off"></span> FTM</div>
+    <div class="status-chip" id="chip-wifi"><span class="dot off"></span> WiFi</div>
+    <div class="status-chip" id="chip-kmod"><span class="dot off"></span> KMod</div>
+  </div>
+
+  <!-- ==================== RADIO PAGE ==================== -->
+  <div class="page active" id="page-radio">
+    <div class="section">
+      <div class="section-title">Mode Switches</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Engineering Mode</div>
+            <div class="card-row-desc">build.type=eng, root ADB, diag USB</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-eng"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Factory Field Test</div>
+            <div class="card-row-desc">Radio field test, hidden band info, factory props</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-factory"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Hidden Menus</div>
+            <div class="card-row-desc">ServiceMode, SysDump, Shannon debug</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-hidden"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">USB Diagnostics</div>
+            <div class="card-row-desc">diag,serial_cdev,rmnet — Shannon DM over USB</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-diag"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Modem Logging</div>
+            <div class="card-row-desc">Ramdump, DIAG log, mdlog, CP log</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-modem"><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Radio Info</div>
+      <div class="info-grid" style="border:1px solid var(--border);border-radius:var(--radius)">
+        <div class="info-cell"><div class="info-label">SoC Family</div><div class="info-value" id="info-soc">-</div></div>
+        <div class="info-cell"><div class="info-label">Baseband</div><div class="info-value" id="info-baseband">-</div></div>
+        <div class="info-cell"><div class="info-label">Platform</div><div class="info-value" id="info-chipset">-</div></div>
+        <div class="info-cell"><div class="info-label">Network</div><div class="info-value" id="info-network">-</div></div>
+        <div class="info-cell"><div class="info-label">Operator</div><div class="info-value" id="info-operator">-</div></div>
+        <div class="info-cell"><div class="info-label">SIM</div><div class="info-value" id="info-sim">-</div></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Modem Interfaces</div>
+      <div class="card" id="modem-interfaces"><div class="card-row"><div class="card-row-desc">Scanning...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">RF Thermal</div>
+      <div class="card" id="thermal-info"><div class="card-row"><div class="card-row-desc">Loading...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">CP (Modem Processor) Debug</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Modem State</div>
+            <div class="card-row-desc" id="cp-state">—</div>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">PCIe Stats</div>
+            <div class="card-row-desc" id="cp-pcie">—</div>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">SBB Debug</div>
+            <div class="card-row-desc" id="cp-sbb">—</div>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Trigger CP Crash Dump</div>
+            <div class="card-row-desc">Write to /sys/devices/platform/cpif/do_cp_crash for modem ramdump analysis</div>
+          </div>
+          <button class="btn btn-danger" style="padding:6px 12px;font-size:12px" onclick="triggerCPCrash()">Dump</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" onclick="loadRadio()">Refresh</button>
+      <button class="btn btn-danger" onclick="reboot()">Reboot</button>
+    </div>
+  </div>
+
+  <!-- ==================== AT TERMINAL ==================== -->
+  <div class="page" id="page-terminal">
+    <div class="section">
+      <div class="section-title">AT Command Terminal</div>
+      <div class="card" style="padding:12px 16px">
+        <div class="card-row-desc" style="margin-bottom:8px">
+          Direct AT interface to Shannon 5400 modem via /dev/umts_router.
+        </div>
+        <div id="at-history" class="terminal-output"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input type="text" id="at-input" class="terminal-input" placeholder="AT+CFUN?" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')sendATCmd()">
+          <button class="btn btn-primary" style="flex-shrink:0;padding:8px 16px" onclick="sendATCmd()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" id="at-presets-title">Quick Commands</div>
+      <div id="at-presets" class="card"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Discovered Commands — Shannon 5400 (S5400BUNUELO)</div>
+      <div id="discovered-commands"></div>
+    </div>
+  </div>
+
+  <!-- ==================== WIFI PAGE ==================== -->
+  <div class="page" id="page-wifi">
+    <div class="section">
+      <div class="section-title">Kernel Modules</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">rc_wifi_mon</div>
+            <div class="card-row-desc">Runtime monitor/injection mode patch for cfg80211</div>
+          </div>
+          <button class="btn" id="btn-kmod-wifi" style="padding:6px 12px;font-size:12px" onclick="toggleKmod('rc_wifi_mon')">Load</button>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">rc_shannon_cmd</div>
+            <div class="card-row-desc">Shannon modem direct AT bypass (/dev/rc_shannon)</div>
+          </div>
+          <button class="btn" id="btn-kmod-shannon" style="padding:6px 12px;font-size:12px" onclick="toggleKmod('rc_shannon_cmd')">Load</button>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">rc_diag_bridge</div>
+            <div class="card-row-desc">Qualcomm DIAG/NV item bridge (/dev/rc_diag)</div>
+          </div>
+          <button class="btn" id="btn-kmod-diag" style="padding:6px 12px;font-size:12px" onclick="toggleKmod('rc_diag_bridge')">Load</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">WiFi Radio Mode</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Select Mode</div>
+            <div class="card-row-desc">Requires rc_wifi_mon for monitor/injection on BCM4390</div>
+          </div>
+        </div>
+        <div class="mode-grid">
+          <button class="mode-btn active" data-mode="managed">Managed</button>
+          <button class="mode-btn" data-mode="monitor">Monitor</button>
+          <button class="mode-btn" data-mode="injection">Injection</button>
+          <button class="mode-btn" data-mode="mesh">Mesh</button>
+          <button class="mode-btn" data-mode="ap">AP</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">BCM4390 Driver Parameters</div>
+      <div class="card" id="wifi-params"><div class="card-row"><div class="card-row-desc">Loading...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">WiFi Firmware</div>
+      <div class="card" id="wifi-firmware"><div class="card-row"><div class="card-row-desc">Loading...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">WiFi Hardware</div>
+      <div class="card" id="wifi-hw-info"><div class="card-row"><div class="card-row-desc">Detecting...</div></div></div>
+    </div>
+  </div>
+
+  <!-- ==================== CARRIER PAGE ==================== -->
+  <div class="page" id="page-carrier">
+    <div class="section">
+      <div class="section-title">Carrier Config Override</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Force VoLTE</div>
+            <div class="card-row-desc">carrier_volte_available_bool — enable on any carrier</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-volte"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Force VoNR (5G Voice)</div>
+            <div class="card-row-desc">Enable voice over NR standalone</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-vonr"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Force WiFi Calling</div>
+            <div class="card-row-desc">carrier_wfc_ims_available_bool</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-wfc"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Force Video Calling</div>
+            <div class="card-row-desc">carrier_vt_available_bool</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-vt"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Allow Custom APNs</div>
+            <div class="card-row-desc">allow_adding_apns_bool — unlock APN editing</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-apn"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">NR Advanced (mmWave icon)</div>
+            <div class="card-row-desc">nr_advanced_capable_carrier_bool</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-nradv"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">Show Network Type Selector</div>
+            <div class="card-row-desc">Unhide preferred network type in settings</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggle-nettype"><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Carrier Settings Files</div>
+      <div class="card" id="carrier-files"><div class="card-row"><div class="card-row-desc">Scanning /product/etc/CarrierSettings/...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Current Carrier Config Dump</div>
+      <div class="card" style="padding:12px 16px">
+        <button class="btn" onclick="dumpCarrierConfig()" style="width:100%">Run: dumpsys carrier_config</button>
+        <pre class="file-content" id="carrier-dump" style="margin-top:8px;display:none"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== DEBUGFS BROWSER ==================== -->
+  <div class="page" id="page-debug">
+    <div class="section">
+      <div class="section-title">debugfs / sysfs Browser</div>
+      <div class="card" style="padding:12px 16px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="fs-path" class="terminal-input" value="/sys/kernel/debug" placeholder="/sys/kernel/debug"
+                 onkeydown="if(event.key==='Enter')browsePath()">
+          <button class="btn" style="flex-shrink:0;padding:8px 12px" onclick="browsePath()">Go</button>
+          <button class="btn" style="flex-shrink:0;padding:8px 12px" onclick="fsUp()">Up</button>
+        </div>
+        <div id="fs-breadcrumb" class="breadcrumb"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div id="fs-content" class="card">
+        <div class="card-row"><div class="card-row-desc">Enter a path above</div></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Quick Paths</div>
+      <div class="card" id="debugfs-shortcuts"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Thread / 802.15.4 Radio (Wonder)</div>
+      <div class="card" id="thread-info"><div class="card-row"><div class="card-row-desc">Loading...</div></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Satellite / NTN (Skylo)</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-info">
+            <div class="card-row-label">AT+SKYLOTEST</div>
+            <div class="card-row-desc">Non-terrestrial network test mode — satellite IoT connectivity</div>
+          </div>
+          <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="runPreset('AT+SKYLOTEST')">Run</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== FLAGS PAGE ==================== -->
+  <div class="page" id="page-flags">
+    <div class="section">
+      <div class="section-title">System Properties</div>
+      <div class="card">
+        <table class="flags-table"><tbody id="flags-body">
+          <tr><td class="prop-name" colspan="2">Loading...</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+    <div class="actions" style="grid-template-columns:1fr">
+      <button class="btn" onclick="loadFlags()">Refresh</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="tab-bar">
+  <button class="tab-item active" data-tab="radio">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+    Radio
+  </button>
+  <button class="tab-item" data-tab="terminal">
+    <svg viewBox="0 0 24 24"><path d="M20 19V7H4v12h16m0-16a2 2 0 012 2v14a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h16M7 9l3.5 3.5L7 16l1 1 4.5-4.5L8 8l-1 1m5 7h5v1h-5v-1z"/></svg>
+    AT
+  </button>
+  <button class="tab-item" data-tab="wifi">
+    <svg viewBox="0 0 24 24"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
+    WiFi
+  </button>
+  <button class="tab-item" data-tab="carrier">
+    <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM8 20H4v-4h4v4zm0-6H4v-4h4v4zm0-6H4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4z"/></svg>
+    Carrier
+  </button>
+  <button class="tab-item" data-tab="debug">
+    <svg viewBox="0 0 24 24"><path d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
+    Debug
+  </button>
+  <button class="tab-item" data-tab="flags">
+    <svg viewBox="0 0 24 24"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>
+    Flags
+  </button>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>

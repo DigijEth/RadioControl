@@ -1,0 +1,6 @@
+id=radiocontrol
+name=RadioControl
+version=v1.0.0
+versionCode=1
+author=snake
+description=Factory field test menus, WiFi radio mode switching (monitor/injection/mesh), hidden radio features, engineering mode & system flags — all from a WebUI.

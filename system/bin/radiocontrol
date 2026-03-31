@@ -1,0 +1,726 @@
+#!/system/bin/sh
+# RadioControl WebUI — HTTP server with hardware interface APIs
+
+WEBROOT="/data/adb/modules/radiocontrol/webroot"
+CONFIG_DIR="/data/adb/radiocontrol"
+CONFIG_FILE="$CONFIG_DIR/config.sh"
+PORT=8088
+
+mkdir -p "$CONFIG_DIR"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [webui] $1"; }
+
+###########################
+# Hardware interface helpers
+###########################
+
+# Send AT command to modem — tries rc_shannon first, then raw devices
+send_at_cmd() {
+  local cmd="$1"
+  local timeout="${2:-3}"
+  local result=""
+
+  # Try our kernel module device first
+  if [ -c /dev/rc_shannon ]; then
+    echo -e "${cmd}\r" > /dev/rc_shannon
+    result=$(timeout "$timeout" cat /dev/rc_shannon 2>/dev/null)
+    [ -n "$result" ] && echo "$result" && return 0
+  fi
+
+  # Try available AT devices — umts_router is confirmed working on Tensor/Shannon 5400
+  for dev in /dev/umts_router /dev/umts_atc0 /dev/nr_atc0 /dev/umts_atc1 /dev/smd7 /dev/ttyHS0; do
+    if [ -c "$dev" ]; then
+      result=$(
+        exec 3<>"$dev" 2>/dev/null
+        if [ $? -eq 0 ]; then
+          printf "${cmd}\r\n" >&3
+          sleep "$timeout"
+          local buf=""
+          while read -t 1 line <&3 2>/dev/null; do
+            buf="${buf}${line}\n"
+          done
+          echo -e "$buf"
+          exec 3>&-
+        fi
+      )
+      [ -n "$result" ] && echo "$result" && return 0
+    fi
+  done
+
+  echo "ERROR: No modem AT interface available"
+  return 1
+}
+
+# Read a debugfs or sysfs path safely
+read_sys_path() {
+  local path="$1"
+  local max_bytes="${2:-4096}"
+
+  # Validate path — only allow /sys and /proc
+  case "$path" in
+    /sys/kernel/debug/*|/sys/class/*|/sys/devices/*|/sys/module/*|/sys/bus/*|/proc/*)
+      ;;
+    *)
+      echo "ERROR: path not allowed"
+      return 1
+      ;;
+  esac
+
+  if [ -f "$path" ]; then
+    head -c "$max_bytes" "$path" 2>/dev/null
+  elif [ -d "$path" ]; then
+    ls -la "$path" 2>/dev/null
+  else
+    echo "ERROR: not found"
+    return 1
+  fi
+}
+
+# Write to a sysfs path
+write_sys_path() {
+  local path="$1"
+  local value="$2"
+
+  case "$path" in
+    /sys/class/*|/sys/devices/*|/sys/module/*)
+      ;;
+    *)
+      echo "ERROR: write path not allowed"
+      return 1
+      ;;
+  esac
+
+  if [ -w "$path" ]; then
+    echo "$value" > "$path" 2>/dev/null && echo "OK" || echo "ERROR: write failed"
+  else
+    echo "ERROR: not writable"
+    return 1
+  fi
+}
+
+# List directory contents as JSON
+list_dir_json() {
+  local dir="$1"
+  local result="["
+  local first=1
+
+  if [ ! -d "$dir" ]; then
+    echo "[]"
+    return
+  fi
+
+  for entry in "$dir"/*; do
+    [ ! -e "$entry" ] && continue
+    local name=$(basename "$entry")
+    local type="file"
+    [ -d "$entry" ] && type="dir"
+    local readable="false"
+    [ -r "$entry" ] && readable="true"
+    local writable="false"
+    [ -w "$entry" ] && writable="true"
+
+    if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+    result="$result{\"name\":\"$name\",\"type\":\"$type\",\"readable\":$readable,\"writable\":$writable}"
+  done
+
+  echo "${result}]"
+}
+
+# Get WiFi interface details
+get_wifi_details() {
+  cat "$CONFIG_DIR/wifi_info" 2>/dev/null
+}
+
+# Get loaded kernel modules status
+get_kmod_status() {
+  local result="{"
+  local mon="false" shan="false" diag="false"
+
+  lsmod 2>/dev/null | grep -q rc_wifi_mon && mon="true"
+  lsmod 2>/dev/null | grep -q rc_shannon_cmd && shan="true"
+  lsmod 2>/dev/null | grep -q rc_diag_bridge && diag="true"
+
+  echo "{\"wifi_mon\":$mon,\"shannon_cmd\":$shan,\"diag_bridge\":$diag}"
+}
+
+# Get thermal zones related to radios
+get_thermal_info() {
+  local result="["
+  local first=1
+
+  for tz in /sys/class/thermal/thermal_zone*; do
+    local type=$(cat "$tz/type" 2>/dev/null)
+    case "$type" in
+      *modem*|*pa*|*wlan*|*wifi*|*rf*|*mdm*|*qfe*|*battery*)
+        local temp=$(cat "$tz/temp" 2>/dev/null)
+        if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+        result="$result{\"zone\":\"$(basename $tz)\",\"type\":\"$type\",\"temp\":$temp}"
+        ;;
+    esac
+  done
+
+  echo "${result}]"
+}
+
+# Get current config
+get_current_config() {
+  source "$CONFIG_FILE" 2>/dev/null
+  local soc=$(cat "$CONFIG_DIR/detected_soc" 2>/dev/null)
+  cat << CONF
+{
+  "engineering_mode": "${ENGINEERING_MODE:-0}",
+  "factory_test_mode": "${FACTORY_TEST_MODE:-0}",
+  "usb_diag_mode": "${USB_DIAG_MODE:-0}",
+  "hidden_menus": "${HIDDEN_MENUS:-0}",
+  "modem_log": "${MODEM_LOG:-0}",
+  "wifi_mode": "${WIFI_MODE:-managed}",
+  "load_modules": "${LOAD_MODULES:-}",
+  "detected_soc": "$soc"
+}
+CONF
+}
+
+# Get available modem interfaces
+get_modem_interfaces() {
+  local result="["
+  local first=1
+
+  for dev in /dev/umts_atc0 /dev/umts_atc1 /dev/umts_router0 /dev/umts_ipc0 \
+             /dev/umts_dm0 /dev/umts_boot0 /dev/umts_ramdump0 /dev/umts_rfs0 \
+             /dev/nr_atc0 /dev/nr_ipc0 \
+             /dev/diag /dev/smd7 /dev/ttyHS0 /dev/ttyMSM0 /dev/at_mdm0 \
+             /dev/rc_shannon /dev/rc_diag; do
+    if [ -c "$dev" ]; then
+      local perms=$(ls -la "$dev" 2>/dev/null | awk '{print $1}')
+      if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+      result="$result{\"path\":\"$dev\",\"perms\":\"$perms\"}"
+    fi
+  done
+
+  echo "${result}]"
+}
+
+# Get radio info from props and modem
+get_radio_info() {
+  local baseband=$(getprop gsm.version.baseband 2>/dev/null)
+  local ril=$(getprop gsm.version.ril-impl 2>/dev/null)
+  local nettype=$(getprop gsm.network.type 2>/dev/null)
+  local simstate=$(getprop gsm.sim.state 2>/dev/null)
+  local operator=$(getprop gsm.operator.alpha 2>/dev/null)
+  local chipset=$(getprop ro.board.platform 2>/dev/null)
+  local hardware=$(getprop ro.hardware 2>/dev/null)
+  local soc=$(cat "$CONFIG_DIR/detected_soc" 2>/dev/null)
+
+  cat << INFO
+{
+  "baseband":"$baseband",
+  "ril":"$ril",
+  "network_type":"$nettype",
+  "sim_state":"$simstate",
+  "operator":"$operator",
+  "chipset":"$chipset",
+  "hardware":"$hardware",
+  "soc_family":"$soc"
+}
+INFO
+}
+
+# Get system flags
+get_system_flags() {
+  local result="["
+  local first=1
+  for prop in \
+    ro.build.type ro.debuggable ro.secure ro.adb.secure \
+    persist.sys.usb.config persist.sys.factorytest ro.factorytest \
+    persist.radio.fieldtest ro.telephony.hidden_menu \
+    persist.radio.hidden_menu persist.mtk.engineer \
+    persist.vendor.radio.adb_log_on persist.radio.ramdump \
+    persist.vendor.radio.enableadvanced persist.radio.field_test \
+    persist.vendor.radio.ca_info persist.vendor.radio.nr5g \
+    persist.vendor.radio.modem_log persist.cp.log persist.cp.rat \
+    ro.board.platform ro.hardware ro.hardware.chipname \
+    gsm.version.baseband gsm.version.ril-impl; do
+    val=$(getprop "$prop" 2>/dev/null)
+    if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+    result="$result{\"prop\":\"$prop\",\"value\":\"$val\"}"
+  done
+  echo "${result}]"
+}
+
+# Update config key
+update_config() {
+  local key="$1" val="$2"
+
+  case "$key" in
+    ENGINEERING_MODE|FACTORY_TEST_MODE|USB_DIAG_MODE|HIDDEN_MENUS|MODEM_LOG)
+      case "$val" in 0|1) ;; *) echo '{"ok":false,"error":"invalid value"}'; return ;; esac ;;
+    WIFI_MODE)
+      case "$val" in managed|monitor|injection|mesh|ap) ;; *) echo '{"ok":false,"error":"invalid mode"}'; return ;; esac ;;
+    LOAD_MODULES)
+      ;; # freeform
+    *) echo '{"ok":false,"error":"invalid key"}'; return ;;
+  esac
+
+  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$CONFIG_FILE"
+  else
+    echo "${key}=${val}" >> "$CONFIG_FILE"
+  fi
+  echo "{\"ok\":true}"
+}
+
+# Set WiFi mode immediately
+set_wifi_mode() {
+  local mode="$1"
+  local iface=""
+
+  for candidate in wlan0 wlan1 wifi0; do
+    [ -d "/sys/class/net/$candidate" ] && iface="$candidate" && break
+  done
+  [ -z "$iface" ] && echo '{"ok":false,"error":"no wifi interface"}' && return
+
+  ip link set "$iface" down 2>/dev/null
+  case "$mode" in
+    monitor)   iw dev "$iface" set type monitor 2>/dev/null ;;
+    injection) iw dev "$iface" set type monitor 2>/dev/null
+               iw dev "$iface" set monitor fcsfail otherbss 2>/dev/null ;;
+    mesh)      iw dev "$iface" set type mesh 2>/dev/null ;;
+    ap)        iw dev "$iface" set type __ap 2>/dev/null ;;
+    managed|*) iw dev "$iface" set type managed 2>/dev/null; mode="managed" ;;
+  esac
+  ip link set "$iface" up 2>/dev/null
+
+  sed -i "s/^WIFI_MODE=.*/WIFI_MODE=$mode/" "$CONFIG_FILE" 2>/dev/null
+  echo "{\"ok\":true,\"mode\":\"$mode\",\"iface\":\"$iface\"}"
+}
+
+# Get BCM4390 driver parameters
+get_wifi_params() {
+  local result="["
+  local first=1
+  local pdir="/sys/module/bcmdhd4390/parameters"
+
+  [ ! -d "$pdir" ] && echo "[]" && return
+
+  for p in "$pdir"/*; do
+    local name=$(basename "$p")
+    local val=$(cat "$p" 2>/dev/null)
+    local writable="false"
+    [ -w "$p" ] && writable="true"
+    # Escape val for JSON
+    val=$(echo "$val" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+    if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+    result="$result{\"name\":\"$name\",\"value\":\"$val\",\"writable\":$writable}"
+  done
+  echo "${result}]"
+}
+
+# Set BCM4390 driver parameter
+set_wifi_param() {
+  local name="$1" val="$2"
+  local path="/sys/module/bcmdhd4390/parameters/$name"
+
+  # Validate name (no path traversal)
+  case "$name" in */*|*..*) echo '{"ok":false,"error":"invalid param name"}'; return ;; esac
+
+  if [ -w "$path" ]; then
+    echo "$val" > "$path" 2>/dev/null
+    local newval=$(cat "$path" 2>/dev/null)
+    echo "{\"ok\":true,\"value\":\"$newval\"}"
+  else
+    echo "{\"ok\":false,\"error\":\"param not writable\"}"
+  fi
+}
+
+# Get WiFi firmware info
+get_wifi_firmware() {
+  local result="["
+  local first=1
+
+  for fw in /vendor/firmware/fw_bcmdhd* /vendor/firmware/bcmdhd*; do
+    [ ! -f "$fw" ] && continue
+    local name=$(basename "$fw")
+    local size=$(stat -c%s "$fw" 2>/dev/null || ls -la "$fw" | awk '{print $5}')
+    if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+    result="$result{\"path\":\"$fw\",\"name\":\"$name\",\"size\":$size}"
+  done
+
+  # Current loaded firmware
+  local cur_fw=$(cat /sys/module/bcmdhd4390/parameters/firmware_path 2>/dev/null)
+  local cur_nv=$(cat /sys/module/bcmdhd4390/parameters/nvram_path 2>/dev/null)
+  local info=$(cat /sys/module/bcmdhd4390/parameters/info_string 2>/dev/null | sed 's/"/\\"/g' | tr '\n' ' ')
+
+  echo "${result}],\"current_fw\":\"$cur_fw\",\"current_nvram\":\"$cur_nv\",\"info\":\"$info\"}"
+}
+
+# Get CP (modem processor) debug info
+get_cp_debug() {
+  local state=$(cat /sys/devices/platform/cpif/modem_state 2>/dev/null)
+  local pcie=""
+  local sbb=""
+
+  [ -f /sys/devices/platform/cpif/modem/pcie_event_stats ] && \
+    pcie=$(cat /sys/devices/platform/cpif/modem/pcie_event_stats 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|/\\n/g')
+  [ -f /sys/devices/platform/cpif/modem/sbb_debug ] && \
+    sbb=$(cat /sys/devices/platform/cpif/modem/sbb_debug 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|/\\n/g')
+  [ -f /sys/devices/platform/cpif/modem/power_stats ] && \
+    power=$(cat /sys/devices/platform/cpif/modem/power_stats 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|/\\n/g')
+
+  echo "{\"state\":\"$state\",\"pcie_stats\":\"$pcie\",\"sbb_debug\":\"$sbb\",\"power_stats\":\"$power\"}"
+}
+
+# Trigger CP crash dump
+trigger_cp_crash() {
+  if [ -f /sys/devices/platform/cpif/do_cp_crash ]; then
+    echo 1 > /sys/devices/platform/cpif/do_cp_crash 2>/dev/null
+    echo '{"ok":true,"msg":"CP crash triggered — ramdump will be saved to /data/vendor/log/cbd/"}'
+  else
+    echo '{"ok":false,"error":"do_cp_crash not available"}'
+  fi
+}
+
+# Carrier config — read current settings
+get_carrier_config() {
+  local volte=$(settings get global enhanced_4g_mode_enabled 2>/dev/null)
+  local wfc=$(settings get global wifi_calling_enabled 2>/dev/null)
+  local netsel=$(getprop persist.dbg.hide_preferred_network_type 2>/dev/null)
+
+  echo "{\"volte\":\"$volte\",\"wfc\":\"$wfc\",\"hide_network_type\":\"$netsel\"}"
+}
+
+# Carrier config — set a carrier override
+set_carrier_flag() {
+  local flag="$1" val="$2"
+
+  case "$flag" in
+    volte)
+      settings put global enhanced_4g_mode_enabled "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    vonr)
+      settings put global vonr_enabled "$val" 2>/dev/null
+      resetprop persist.vendor.radio.vonr_enabled "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    wfc)
+      settings put global wifi_calling_enabled "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    vt)
+      settings put global vt_ims_enabled "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    apn)
+      resetprop persist.dbg.allow_adding_apns 1 2>/dev/null
+      settings put global allow_adding_apns "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    nradv)
+      resetprop persist.vendor.radio.nr_advanced "$val" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    nettype)
+      # val=1 means SHOW (so hide=0)
+      resetprop persist.dbg.hide_preferred_network_type "$( [ "$val" = "1" ] && echo 0 || echo 1)" 2>/dev/null
+      echo '{"ok":true}'
+      ;;
+    *) echo '{"ok":false,"error":"unknown flag"}' ;;
+  esac
+}
+
+# List carrier settings protobuf files
+get_carrier_files() {
+  local result="["
+  local first=1
+  local csdir="/product/etc/CarrierSettings"
+
+  if [ -d "$csdir" ]; then
+    for f in "$csdir"/*; do
+      [ ! -f "$f" ] && continue
+      local name=$(basename "$f")
+      local size=$(stat -c%s "$f" 2>/dev/null || ls -la "$f" | awk '{print $5}')
+      if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+      result="$result{\"name\":\"$name\",\"size\":$size}"
+    done
+  fi
+  echo "${result}]"
+}
+
+# Dump carrier_config service
+dump_carrier_config() {
+  dumpsys carrier_config 2>/dev/null | head -500
+}
+
+# Thread radio (Wonder) info
+get_thread_info() {
+  local result="{"
+  local has_wonder="false"
+
+  if [ -d /sys/class/ieee80211/wonder ]; then
+    has_wonder="true"
+    local mac=$(cat /sys/class/ieee80211/wonder/macaddress 2>/dev/null)
+    local name=$(cat /sys/class/ieee80211/wonder/name 2>/dev/null)
+    local idx=$(cat /sys/class/ieee80211/wonder/index 2>/dev/null)
+    result="$result\"present\":true,\"mac\":\"$mac\",\"name\":\"$name\",\"index\":\"$idx\""
+
+    # debugfs
+    local dbg_entries=""
+    if [ -d /sys/kernel/debug/wonder ]; then
+      dbg_entries=$(ls /sys/kernel/debug/wonder/ 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+    fi
+    result="$result,\"debugfs_entries\":\"$dbg_entries\""
+
+    # force_stop_tx status
+    if [ -f /sys/kernel/debug/wonder/force_stop_tx ]; then
+      local fstx=$(cat /sys/kernel/debug/wonder/force_stop_tx 2>/dev/null)
+      result="$result,\"force_stop_tx\":\"$fstx\""
+    fi
+
+    # thread-wpan interface
+    if [ -d /sys/class/net/thread-wpan ]; then
+      result="$result,\"wpan_iface\":true"
+    else
+      result="$result,\"wpan_iface\":false"
+    fi
+  else
+    result="$result\"present\":false"
+  fi
+
+  echo "${result}}"
+}
+
+# Load/unload kernel module
+manage_kmod() {
+  local action="$1" mod="$2"
+  local kmod_dir="/data/adb/modules/radiocontrol/common/kmod"
+
+  case "$mod" in
+    rc_wifi_mon|rc_shannon_cmd|rc_diag_bridge) ;;
+    *) echo '{"ok":false,"error":"unknown module"}'; return ;;
+  esac
+
+  if [ "$action" = "load" ]; then
+    if lsmod 2>/dev/null | grep -q "$mod"; then
+      echo '{"ok":true,"status":"already loaded"}'
+    elif [ -f "$kmod_dir/${mod}.ko" ]; then
+      insmod "$kmod_dir/${mod}.ko" 2>/dev/null
+      if [ $? -eq 0 ]; then
+        echo '{"ok":true,"status":"loaded"}'
+      else
+        echo '{"ok":false,"error":"insmod failed — kernel version mismatch?"}'
+      fi
+    else
+      echo '{"ok":false,"error":"module .ko not found"}'
+    fi
+  elif [ "$action" = "unload" ]; then
+    rmmod "$mod" 2>/dev/null
+    echo '{"ok":true,"status":"unloaded"}'
+  fi
+}
+
+###########################
+# HTTP server
+###########################
+
+get_mime() {
+  case "$1" in
+    *.html) echo "text/html" ;; *.css) echo "text/css" ;;
+    *.js) echo "text/javascript" ;; *.json) echo "application/json" ;;
+    *) echo "text/plain" ;;
+  esac
+}
+
+send_response() {
+  local code="$1" ct="$2" body="$3"
+  printf "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET,POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n\r\n%s" \
+    "$code" "$ct" "${#body}" "$body"
+}
+
+send_file() {
+  local f="$1"
+  if [ -f "$f" ]; then
+    send_response "200 OK" "$(get_mime "$f")" "$(cat "$f")"
+  else
+    send_response "404 Not Found" "text/plain" "Not Found"
+  fi
+}
+
+# JSON body parser — extract value for key
+json_val() {
+  echo "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
+}
+
+handle_request() {
+  local method path query body content_length
+
+  read -r request_line
+  method=$(echo "$request_line" | awk '{print $1}')
+  local full_path=$(echo "$request_line" | awk '{print $2}')
+  path=$(echo "$full_path" | cut -d'?' -f1)
+  query=$(echo "$full_path" | grep -o '?.*' | cut -c2-)
+
+  while read -r header; do
+    header=$(echo "$header" | tr -d '\r')
+    [ -z "$header" ] && break
+    case "$header" in Content-Length:*) content_length=$(echo "$header" | awk '{print $2}') ;; esac
+  done
+
+  body=""
+  if [ "$method" = "POST" ] && [ -n "$content_length" ] && [ "$content_length" -gt 0 ] 2>/dev/null; then
+    body=$(dd bs=1 count="$content_length" 2>/dev/null)
+  fi
+
+  # Handle OPTIONS for CORS
+  if [ "$method" = "OPTIONS" ]; then
+    send_response "200 OK" "text/plain" ""
+    return
+  fi
+
+  log "$method $path"
+
+  case "$method $path" in
+    # Static files
+    "GET /")           send_file "$WEBROOT/index.html" ;;
+    "GET /css/"*|"GET /js/"*) send_file "$WEBROOT$path" ;;
+
+    # Status & info APIs
+    "GET /api/status")    send_response "200 OK" "application/json" "$(get_current_config)" ;;
+    "GET /api/radio")     send_response "200 OK" "application/json" "$(get_radio_info)" ;;
+    "GET /api/flags")     send_response "200 OK" "application/json" "$(get_system_flags)" ;;
+    "GET /api/thermal")   send_response "200 OK" "application/json" "$(get_thermal_info)" ;;
+    "GET /api/kmod")      send_response "200 OK" "application/json" "$(get_kmod_status)" ;;
+    "GET /api/modem/interfaces") send_response "200 OK" "application/json" "$(get_modem_interfaces)" ;;
+    "GET /api/wifi/info") send_response "200 OK" "text/plain" "$(get_wifi_details)" ;;
+    "GET /api/wifi/params") send_response "200 OK" "application/json" "$(get_wifi_params)" ;;
+    "GET /api/wifi/firmware")
+      local fwdata=$(get_wifi_firmware)
+      send_response "200 OK" "application/json" "{\"files\":$fwdata}"
+      ;;
+    "GET /api/cp") send_response "200 OK" "application/json" "$(get_cp_debug)" ;;
+    "GET /api/carrier/config") send_response "200 OK" "application/json" "$(get_carrier_config)" ;;
+    "GET /api/carrier/files") send_response "200 OK" "application/json" "$(get_carrier_files)" ;;
+    "GET /api/carrier/dump")
+      local dump=$(dump_carrier_config | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' '|' | sed 's/|/\\n/g')
+      send_response "200 OK" "application/json" "{\"dump\":\"$dump\"}"
+      ;;
+    "GET /api/thread") send_response "200 OK" "application/json" "$(get_thread_info)" ;;
+
+    # AT command terminal
+    "POST /api/at")
+      local cmd=$(json_val "$body" "cmd")
+      local timeout=$(json_val "$body" "timeout")
+      [ -z "$timeout" ] && timeout=3
+      local resp=$(send_at_cmd "$cmd" "$timeout")
+      # Escape for JSON
+      resp=$(echo "$resp" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' '|' | sed 's/|/\\n/g')
+      send_response "200 OK" "application/json" "{\"ok\":true,\"response\":\"$resp\"}"
+      ;;
+
+    # debugfs/sysfs browser
+    "POST /api/fs/read")
+      local fspath=$(json_val "$body" "path")
+      if [ -d "$fspath" ]; then
+        local listing=$(list_dir_json "$fspath")
+        send_response "200 OK" "application/json" "{\"type\":\"dir\",\"entries\":$listing}"
+      else
+        local content=$(read_sys_path "$fspath" 8192)
+        content=$(echo "$content" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' '|' | sed 's/|/\\n/g')
+        send_response "200 OK" "application/json" "{\"type\":\"file\",\"content\":\"$content\"}"
+      fi
+      ;;
+
+    "POST /api/fs/write")
+      local fspath=$(json_val "$body" "path")
+      local fsval=$(json_val "$body" "value")
+      local result=$(write_sys_path "$fspath" "$fsval")
+      send_response "200 OK" "application/json" "{\"ok\":true,\"result\":\"$result\"}"
+      ;;
+
+    # debugfs paths list
+    "GET /api/debugfs")
+      local paths=$(cat "$CONFIG_DIR/debugfs_paths" 2>/dev/null)
+      local result="["
+      local first=1
+      for p in $paths; do
+        [ -z "$p" ] && continue
+        if [ "$first" = "1" ]; then first=0; else result="$result,"; fi
+        result="$result\"$p\""
+      done
+      send_response "200 OK" "application/json" "${result}]"
+      ;;
+
+    # Config update
+    "POST /api/config")
+      local key=$(json_val "$body" "key")
+      local val=$(json_val "$body" "value")
+      send_response "200 OK" "application/json" "$(update_config "$key" "$val")"
+      ;;
+
+    # WiFi mode switch
+    "POST /api/wifi/mode")
+      local mode=$(json_val "$body" "mode")
+      send_response "200 OK" "application/json" "$(set_wifi_mode "$mode")"
+      ;;
+
+    # Kernel module management
+    "POST /api/kmod/load")
+      local mod=$(json_val "$body" "module")
+      send_response "200 OK" "application/json" "$(manage_kmod load "$mod")"
+      ;;
+    "POST /api/kmod/unload")
+      local mod=$(json_val "$body" "module")
+      send_response "200 OK" "application/json" "$(manage_kmod unload "$mod")"
+      ;;
+
+    # Carrier config flag
+    "POST /api/carrier/set")
+      local flag=$(json_val "$body" "flag")
+      local val=$(json_val "$body" "value")
+      send_response "200 OK" "application/json" "$(set_carrier_flag "$flag" "$val")"
+      ;;
+
+    # WiFi driver param
+    "POST /api/wifi/param")
+      local pname=$(json_val "$body" "name")
+      local pval=$(json_val "$body" "value")
+      send_response "200 OK" "application/json" "$(set_wifi_param "$pname" "$pval")"
+      ;;
+
+    # CP crash dump
+    "POST /api/cp/crash")
+      send_response "200 OK" "application/json" "$(trigger_cp_crash)"
+      ;;
+
+    # Set prop at runtime
+    "POST /api/prop")
+      local prop=$(json_val "$body" "prop")
+      local val=$(json_val "$body" "value")
+      case "$prop" in
+        persist.*|ro.debuggable|ro.build.type|ro.secure|ro.adb.secure|service.adb.root)
+          resetprop "$prop" "$val" 2>/dev/null
+          send_response "200 OK" "application/json" "{\"ok\":true}"
+          ;;
+        *) send_response "200 OK" "application/json" "{\"ok\":false,\"error\":\"not in allowlist\"}" ;;
+      esac
+      ;;
+
+    # Reboot
+    "POST /api/reboot")
+      send_response "200 OK" "application/json" '{"ok":true}'
+      sleep 1; reboot ;;
+
+    *) send_response "404 Not Found" "application/json" '{"error":"not found"}' ;;
+  esac
+}
+
+###########################
+# Main
+###########################
+
+log "Starting HTTP server on port $PORT"
+
+while true; do
+  handle_request | busybox nc -ll -p "$PORT" -s 127.0.0.1 2>/dev/null \
+    || handle_request | toybox nc -L -p "$PORT" -s 127.0.0.1 2>/dev/null \
+    || { log "ERROR: No network listener available"; exit 1; }
+done

@@ -1,0 +1,62 @@
+#!/sbin/sh
+
+#################
+# Initialization
+#################
+
+umask 022
+
+# Global vars
+TMPDIR=/dev/tmp
+PERSISTDIR=/sbin/.magisk/mirror/persist
+
+rm -rf $TMPDIR 2>/dev/null
+mkdir -p $TMPDIR
+
+# Echo before loading util_functions
+ui_print() { echo "$1"; }
+
+require_new_magisk() {
+  ui_print "*******************************"
+  ui_print " Please install KernelSU-Next "
+  ui_print "*******************************"
+  exit 1
+}
+
+##############
+# Environment
+##############
+
+OUTFD=$2
+ZIPFILE=$3
+
+mount /data 2>/dev/null
+
+# Load utility functions
+[ -f /data/adb/magisk/util_functions.sh ] || require_new_magisk
+. /data/adb/magisk/util_functions.sh
+[ $MAGISK_VER_CODE -lt 20400 ] && require_new_magisk
+
+setup_flashable
+mount_partitions
+api_level_arch_detect
+
+###############
+# Module Setup
+###############
+
+MODID=radiocontrol
+MODPATH=$MOUNTPATH/$MODID
+
+ui_print "- Extracting module files"
+unzip -o "$ZIPFILE" -x 'META-INF/*' -d $MODPATH >&2
+
+# Default permissions
+set_perm_recursive $MODPATH 0 0 0755 0644
+set_perm $MODPATH/system/bin/radiocontrol 0 2000 0755
+set_perm $MODPATH/service.sh 0 0 0755
+set_perm $MODPATH/post-fs-data.sh 0 0 0755
+set_perm $MODPATH/uninstall.sh 0 0 0755
+
+ui_print "- RadioControl installed"
+ui_print "- WebUI available at http://localhost:8088"

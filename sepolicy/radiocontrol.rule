@@ -1,0 +1,26 @@
+# RadioControl SELinux rules
+# Note: KernelSU can set SELinux to permissive globally.
+# These rules are for users who prefer to stay in enforcing mode
+# while allowing RadioControl specific access.
+
+# Modem device access (Shannon / Qualcomm)
+allow su radio_device chr_file { open read write ioctl getattr }
+allow su umts_device chr_file { open read write ioctl getattr }
+allow su diag_device chr_file { open read write ioctl getattr }
+
+# debugfs
+allow su debugfs dir { search read open getattr }
+allow su debugfs file { read write open getattr }
+allow su debugfs_wlan dir { search read open getattr }
+allow su debugfs_wlan file { read write open getattr }
+
+# sysfs
+allow su sysfs_net dir { search read open getattr }
+allow su sysfs_net file { read write open getattr setattr }
+
+# Kernel module loading
+allow su kernel system { module_load module_request }
+
+# nl80211 for iw commands
+allow su self netlink_generic_socket { create bind read write }
+allow su self netlink_route_socket { create bind read write nlmsg_write }
