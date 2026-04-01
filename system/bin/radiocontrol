@@ -350,7 +350,7 @@ get_wifi_firmware() {
   local cur_nv=$(cat /sys/module/bcmdhd4390/parameters/nvram_path 2>/dev/null)
   local info=$(cat /sys/module/bcmdhd4390/parameters/info_string 2>/dev/null | sed 's/"/\\"/g' | tr '\n' ' ')
 
-  echo "${result}],\"current_fw\":\"$cur_fw\",\"current_nvram\":\"$cur_nv\",\"info\":\"$info\"}"
+  echo "{\"files\":${result}],\"current_fw\":\"$cur_fw\",\"current_nvram\":\"$cur_nv\",\"info\":\"$info\"}"
 }
 
 # Get CP (modem processor) debug info
@@ -382,10 +382,14 @@ trigger_cp_crash() {
 # Carrier config — read current settings
 get_carrier_config() {
   local volte=$(settings get global enhanced_4g_mode_enabled 2>/dev/null)
+  local vonr=$(settings get global vonr_enabled 2>/dev/null)
   local wfc=$(settings get global wifi_calling_enabled 2>/dev/null)
+  local vt=$(settings get global vt_ims_enabled 2>/dev/null)
+  local apn=$(settings get global allow_adding_apns 2>/dev/null)
+  local nradv=$(getprop persist.vendor.radio.nr_advanced 2>/dev/null)
   local netsel=$(getprop persist.dbg.hide_preferred_network_type 2>/dev/null)
 
-  echo "{\"volte\":\"$volte\",\"wfc\":\"$wfc\",\"hide_network_type\":\"$netsel\"}"
+  echo "{\"volte\":\"$volte\",\"vonr\":\"$vonr\",\"wfc\":\"$wfc\",\"vt\":\"$vt\",\"apn\":\"$apn\",\"nradv\":\"$nradv\",\"hide_network_type\":\"$netsel\"}"
 }
 
 # Carrier config — set a carrier override
@@ -593,8 +597,7 @@ handle_request() {
     "GET /api/wifi/info") send_response "200 OK" "text/plain" "$(get_wifi_details)" ;;
     "GET /api/wifi/params") send_response "200 OK" "application/json" "$(get_wifi_params)" ;;
     "GET /api/wifi/firmware")
-      local fwdata=$(get_wifi_firmware)
-      send_response "200 OK" "application/json" "{\"files\":$fwdata}"
+      send_response "200 OK" "application/json" "$(get_wifi_firmware)"
       ;;
     "GET /api/cp") send_response "200 OK" "application/json" "$(get_cp_debug)" ;;
     "GET /api/carrier/config") send_response "200 OK" "application/json" "$(get_carrier_config)" ;;

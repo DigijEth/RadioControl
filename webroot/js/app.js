@@ -532,7 +532,7 @@ async function loadWifi() {
   }
 
   // WiFi hardware info
-  const wifiText = await fetch('/api/wifi/info').then(r => r.text()).catch(() => '');
+  const wifiText = await fetch('/api/wifi/info').then(r => r.ok ? r.text() : '').catch(() => '');
   const wc = document.getElementById('wifi-hw-info');
   if (wifiText.trim()) {
     const lines = wifiText.trim().split('\n').filter(l => l.includes('='));
@@ -576,7 +576,7 @@ function updateKmodBtn(id, loaded) {
 
 async function toggleKmod(mod) {
   const kmod = await api('/api/kmod');
-  const key = mod.replace('rc_', '').replace('_cmd', '_cmd');
+  const key = mod.replace('rc_', '').replace('_cmd', '');
   const mapKey = mod === 'rc_wifi_mon' ? 'wifi_mon' : mod === 'rc_shannon_cmd' ? 'shannon_cmd' : 'diag_bridge';
   const loaded = kmod && kmod[mapKey];
   const action = loaded ? 'unload' : 'load';
@@ -683,7 +683,11 @@ async function loadCarrier() {
   const cc = await api('/api/carrier/config');
   if (cc) {
     setToggle('toggle-volte', cc.volte);
+    setToggle('toggle-vonr', cc.vonr);
     setToggle('toggle-wfc', cc.wfc);
+    setToggle('toggle-vt', cc.vt);
+    setToggle('toggle-apn', cc.apn);
+    setToggle('toggle-nradv', cc.nradv);
     setToggle('toggle-nettype', cc.hide_network_type === '0' ? '1' : '0');
   }
 
