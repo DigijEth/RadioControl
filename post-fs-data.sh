@@ -23,6 +23,7 @@ FACTORY_TEST_MODE=0
 USB_DIAG_MODE=0
 HIDDEN_MENUS=0
 MODEM_LOG=0
+STEALTH_MODE=0
 WIFI_MODE=managed
 
 # Kernel modules to load (space-separated)
@@ -147,6 +148,41 @@ if [ "$DETECTED_SOC" = "tensor" ]; then
     apply_prop persist.vendor.sys.modem.logging.enable 1
     apply_prop persist.vendor.radio.nr5g 1
     apply_prop persist.vendor.radio.data_nr_allow 1
+  fi
+fi
+
+#############################
+# Stealth mode
+#############################
+
+if [ "$STEALTH_MODE" = "1" ]; then
+  # Use resetprop -n to set props without triggering property_service
+  # This makes changes invisible to apps querying via __system_property_find
+  for prop in ro.build.type ro.debuggable ro.secure ro.adb.secure \
+              ro.factorytest persist.sys.factorytest; do
+    val=$(getprop "$prop" 2>/dev/null)
+    [ -n "$val" ] && resetprop -n "$prop" "$val" 2>/dev/null
+  done
+
+  # SUSFS path hiding — hide module directory from filesystem enumeration
+  # Requires KernelSU-Next with SUSFS enabled
+  if command -v ksud >/dev/null 2>&1; then
+    # Hide our module directory
+    ksud susfs add_sus_path "$MODDIR" 2>/dev/null
+    # Hide config directory
+    ksud susfs add_sus_path "$CONFIG_DIR" 2>/dev/null
+    # Hide kernel module device nodes
+    ksud susfs add_sus_path /dev/rc_shannon 2>/dev/null
+    ksud susfs add_sus_path /dev/rc_diag 2>/dev/null
+    # Hide sysfs status
+    ksud susfs add_sus_path /sys/kernel/rc_wifi_mon 2>/dev/null
+  fi
+
+  # Hide kernel modules from /proc/modules (SUSFS ksu_sus_kstat)
+  if [ -f /proc/susfs_sus_kstat ]; then
+    for mod in rc_wifi_mon rc_shannon_cmd rc_diag_bridge; do
+      echo "$mod" > /proc/susfs_sus_kstat 2>/dev/null
+    done
   fi
 fi
 

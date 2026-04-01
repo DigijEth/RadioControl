@@ -173,6 +173,7 @@ get_current_config() {
   "usb_diag_mode": "${USB_DIAG_MODE:-0}",
   "hidden_menus": "${HIDDEN_MENUS:-0}",
   "modem_log": "${MODEM_LOG:-0}",
+  "stealth_mode": "${STEALTH_MODE:-0}",
   "wifi_mode": "${WIFI_MODE:-managed}",
   "load_modules": "${LOAD_MODULES:-}",
   "detected_soc": "$soc"
@@ -252,7 +253,7 @@ update_config() {
   local key="$1" val="$2"
 
   case "$key" in
-    ENGINEERING_MODE|FACTORY_TEST_MODE|USB_DIAG_MODE|HIDDEN_MENUS|MODEM_LOG)
+    ENGINEERING_MODE|FACTORY_TEST_MODE|USB_DIAG_MODE|HIDDEN_MENUS|MODEM_LOG|STEALTH_MODE)
       case "$val" in 0|1) ;; *) echo '{"ok":false,"error":"invalid value"}'; return ;; esac ;;
     WIFI_MODE)
       case "$val" in managed|monitor|injection|mesh|ap) ;; *) echo '{"ok":false,"error":"invalid mode"}'; return ;; esac ;;

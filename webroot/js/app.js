@@ -62,6 +62,7 @@ async function loadRadio() {
   setToggle('toggle-hidden', config.hidden_menus);
   setToggle('toggle-diag', config.usb_diag_mode);
   setToggle('toggle-modem', config.modem_log);
+  setToggle('toggle-stealth', config.stealth_mode);
 
   updateChips();
 
@@ -814,6 +815,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-hidden')?.addEventListener('change', function() { handleToggle('HIDDEN_MENUS', this); });
   document.getElementById('toggle-diag')?.addEventListener('change', function() { handleToggle('USB_DIAG_MODE', this); });
   document.getElementById('toggle-modem')?.addEventListener('change', function() { handleToggle('MODEM_LOG', this); });
+  document.getElementById('toggle-stealth')?.addEventListener('change', function() { handleToggle('STEALTH_MODE', this); });
 
   // WiFi mode buttons
   document.querySelectorAll('.mode-btn').forEach(btn =>
